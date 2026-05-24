@@ -403,7 +403,7 @@ def build_trip_for_drone(drone, pending, start_time, no_fly_zones, charging_stat
                     result = simulate_trip(drone, trial, start_time, no_fly_zones, charging_stations)
                     if result is None:
                         continue
-                    if best_extension is None or result["score"] > best_extension["score"] + EPS:
+                    if best_extension is None or result["score"] > best_extension["result"]["score"] + EPS:
                         best_extension = {"route": trial, "result": result, "added": delivery}
             if best_extension is None or best_extension["result"]["score"] <= current["score"] + EPS:
                 break
