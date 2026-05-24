@@ -399,19 +399,24 @@ def gather_fast_candidates(deadline_sorted, pending_ids, max_count, drone, exclu
 def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones, charging_stations):
     warehouse = simulate_return_plan.warehouse
     best = None
-    seeds = gather_fast_candidates(deadline_sorted, pending_ids, 48, drone, set())
-    for delivery in seeds:
+    tested = 0
+    max_payload = float(drone["max_payload"])
+    for delivery in deadline_sorted:
+        if delivery["id"] not in pending_ids or float(delivery["weight"]) > max_payload + EPS:
+            continue
         _, return_time, arrivals = estimate_direct_route_time(warehouse, [delivery], start_time, no_fly_zones)
         if arrivals[0] > float(delivery["deadline"]) + 1e-5:
             continue
         if route_energy(warehouse, [delivery]) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
             continue
         trip = simulate_trip(drone, [delivery], start_time, no_fly_zones, charging_stations)
-        if trip is None:
-            continue
-        key = (float(delivery["deadline"]), return_time, -trip["score"])
-        if best is None or key < best["key"]:
-            best = {"route": [delivery], "trip": trip, "key": key}
+        tested += 1
+        if trip is not None:
+            key = (float(delivery["deadline"]), return_time, -trip["score"])
+            if best is None or key < best["key"]:
+                best = {"route": [delivery], "trip": trip, "key": key}
+        if tested >= 32:
+            break
     return best
 
 
