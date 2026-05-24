@@ -1,0 +1,25 @@
+{
+  "map_size": [200, 200],
+  "drones": [
+    {"id": "drone_1", "max_payload": 2.0},
+    {"id": "drone_2", "max_payload": 2.0}
+  ],
+  "deliveries": [
+    {"id": "d1", "x": 30, "y": 30, "weight": 0.4, "deadline": 500},
+    {"id": "d2", "x": 170, "y": 30, "weight": 0.4, "deadline": 500},
+    {"id": "d3", "x": 170, "y": 170, "weight": 0.4, "deadline": 500},
+    {"id": "d4", "x": 30, "y": 170, "weight": 0.4, "deadline": 500},
+    {"id": "d5", "x": 60, "y": 60, "weight": 0.3, "deadline": 600},
+    {"id": "d6", "x": 140, "y": 60, "weight": 0.3, "deadline": 600},
+    {"id": "d7", "x": 140, "y": 140, "weight": 0.3, "deadline": 600},
+    {"id": "d8", "x": 60, "y": 140, "weight": 0.3, "deadline": 600},
+    {"id": "d9", "x": 80, "y": 80, "weight": 0.2, "deadline": 800},
+    {"id": "d10", "x": 120, "y": 120, "weight": 0.2, "deadline": 800},
+    {"id": "d11", "x": 120, "y": 80, "weight": 0.2, "deadline": 800},
+    {"id": "d12", "x": 80, "y": 120, "weight": 0.2, "deadline": 800}
+  ],
+  "charging_stations": [
+    {"x": 100, "y": 100, "slots": 1}
+  ],
+  "no_fly_zones": []
+}

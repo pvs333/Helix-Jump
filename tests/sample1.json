@@ -1,0 +1,23 @@
+{
+  "map_size": [200, 200],
+  "drones": [
+    {"id": "drone_1", "max_payload": 1.0}
+  ],
+  "deliveries": [
+    {"id": "d1", "x": 10, "y": 100, "weight": 0.3, "deadline": 200.0},
+    {"id": "d2", "x": 10, "y": 10, "weight": 0.3, "deadline": 350.0},
+    {"id": "d3", "x": 100, "y": 10, "weight": 0.3, "deadline": 500.0}
+  ],
+  "charging_stations": [
+    {"x": 100, "y": 10}
+  ],
+  "no_fly_zones": [
+    {
+      "shape": "circle",
+      "center": [100, 55],
+      "radius": 15,
+      "T_start": 0.0,
+      "T_end": 150.0
+    }
+  ]
+}

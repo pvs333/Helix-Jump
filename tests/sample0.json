@@ -1,0 +1,12 @@
+{
+  "map_size": [100, 100],
+  "drones": [
+    {"id": "drone_1", "max_payload": 1.0}
+  ],
+  "deliveries": [
+    {"id": "d1", "x": 70, "y": 60, "weight": 0.3, "deadline": 200},
+    {"id": "d2", "x": 30, "y": 80, "weight": 0.4, "deadline": 200}
+  ],
+  "charging_stations": [],
+  "no_fly_zones": []
+}
