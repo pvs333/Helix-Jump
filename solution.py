@@ -396,6 +396,47 @@ def gather_fast_candidates(deadline_sorted, pending_ids, max_count, drone, exclu
     return result
 
 
+
+def direct_trip_result(drone, route, start_time):
+    warehouse = simulate_return_plan.warehouse
+    total_payload = sum(float(d["weight"]) for d in route)
+    if total_payload > float(drone["max_payload"]) + EPS:
+        return None
+    t = float(start_time)
+    payload = total_payload
+    pos = warehouse
+    energy = 0.0
+    path = [step(warehouse, t, "PICKUP", delivery_ids=[d["id"] for d in route])]
+    for delivery in route:
+        target = point_tuple(delivery["x"], delivery["y"])
+        dist = distance(pos, target)
+        t += dist
+        energy += dist * (1.0 + payload)
+        if t > float(delivery["deadline"]) + 1e-5:
+            return None
+        path.append(step(target, t, "DELIVER", delivery_id=delivery["id"]))
+        payload -= float(delivery["weight"])
+        pos = target
+    dist = distance(pos, warehouse)
+    t += dist
+    energy += dist
+    if energy > BATTERY_CAPACITY + 1e-5:
+        return None
+    path.append(step(warehouse, t, "RETURN"))
+    local_score = len(route) * 100.0 - energy * 0.1 - max(0.0, t - start_time) * 0.05
+    if local_score <= 0.0:
+        return None
+    return {
+        "path": path,
+        "delivery_ids": [d["id"] for d in route],
+        "time": t,
+        "energy": energy,
+        "score": local_score,
+        "ends_at_warehouse": True,
+        "reservations": [],
+    }
+
+
 def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones, charging_stations):
     warehouse = simulate_return_plan.warehouse
     best = None
@@ -409,7 +450,10 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
             continue
         if route_energy(warehouse, [delivery]) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
             continue
-        trip = simulate_trip(drone, [delivery], start_time, no_fly_zones, charging_stations)
+        if not no_fly_zones and not charging_stations:
+            trip = direct_trip_result(drone, [delivery], start_time)
+        else:
+            trip = simulate_trip(drone, [delivery], start_time, no_fly_zones, charging_stations)
         tested += 1
         if trip is not None:
             key = (float(delivery["deadline"]), return_time, -trip["score"])
@@ -469,7 +513,10 @@ def build_fast_trip_for_drone(drone, deadline_sorted, pending_ids, start_time, n
             break
 
     while route:
-        trip = simulate_trip(drone, route, start_time, no_fly_zones, charging_stations)
+        if not no_fly_zones and not charging_stations:
+            trip = direct_trip_result(drone, route, start_time)
+        else:
+            trip = simulate_trip(drone, route, start_time, no_fly_zones, charging_stations)
         if trip is not None:
             return trip
         removed = route.pop()
