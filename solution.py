@@ -503,14 +503,25 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
     best = None
     tested = 0
     max_payload = float(drone["max_payload"])
+    large_nfz = bool(no_fly_zones) and len(deadline_sorted) >= 1000
+    test_limit = 10 if large_nfz else 32
     for delivery in deadline_sorted:
         if delivery["id"] not in pending_ids or float(delivery["weight"]) > max_payload + EPS:
             continue
-        _, return_time, arrivals = estimate_direct_route_time(warehouse, [delivery], start_time, no_fly_zones)
-        if arrivals[0] > float(delivery["deadline"]) + 1e-5:
-            if not no_fly_zones or len(deadline_sorted) >= 1000:
+
+        direct_arrival = float(start_time) + distance(warehouse, (delivery["x"], delivery["y"]))
+        if large_nfz:
+            if direct_arrival > float(delivery["deadline"]) + 1e-5:
                 pending_ids.discard(delivery["id"])
-            continue
+                continue
+            return_time = direct_arrival + distance((delivery["x"], delivery["y"]), warehouse)
+        else:
+            _, return_time, arrivals = estimate_direct_route_time(warehouse, [delivery], start_time, no_fly_zones)
+            if arrivals[0] > float(delivery["deadline"]) + 1e-5:
+                if not no_fly_zones:
+                    pending_ids.discard(delivery["id"])
+                continue
+
         if route_energy(warehouse, [delivery]) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
             pending_ids.discard(delivery["id"])
             continue
@@ -518,6 +529,8 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
             trip = direct_trip_result(drone, [delivery], start_time)
         elif len(deadline_sorted) >= 1000:
             trip = direct_wait_trip_result(drone, [delivery], start_time, no_fly_zones)
+            if trip is None and large_nfz:
+                pending_ids.discard(delivery["id"])
         else:
             trip = simulate_trip(drone, [delivery], start_time, no_fly_zones, charging_stations)
         tested += 1
@@ -525,7 +538,7 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
             key = (float(delivery["deadline"]), return_time, -trip["score"])
             if best is None or key < best["key"]:
                 best = {"route": [delivery], "trip": trip, "key": key}
-        if tested >= 32:
+        if tested >= test_limit:
             break
     return best
 
@@ -540,34 +553,57 @@ def build_fast_trip_for_drone(drone, deadline_sorted, pending_ids, start_time, n
     route_ids = {route[0]["id"]}
     used_weight = sum(float(d["weight"]) for d in route)
     max_payload = float(drone["max_payload"])
-    max_stops = 18 if len(deadline_sorted) >= 1000 else 12
+    large_nfz = bool(no_fly_zones) and len(deadline_sorted) >= 1000
+    max_stops = 10 if large_nfz else (18 if len(deadline_sorted) >= 1000 else 12)
 
     while len(route) < max_stops:
         available_weight = max_payload - used_weight
         if available_weight <= EPS:
             break
-        window = gather_fast_candidates(deadline_sorted, pending_ids, 96, drone, route_ids, available_weight)
+        window = gather_fast_candidates(deadline_sorted, pending_ids, 32 if large_nfz else 96, drone, route_ids, available_weight)
         if not window:
             break
 
-        _, base_return, _ = estimate_direct_route_time(warehouse, route, start_time, no_fly_zones)
+        if large_nfz:
+            pos = warehouse
+            base_return = float(start_time)
+            for item in route:
+                target = point_tuple(item["x"], item["y"])
+                base_return += distance(pos, target)
+                pos = target
+            base_return += distance(pos, warehouse)
+        else:
+            _, base_return, _ = estimate_direct_route_time(warehouse, route, start_time, no_fly_zones)
         last_point = point_tuple(route[-1]["x"], route[-1]["y"])
         scored = []
         for delivery in window:
             target = point_tuple(delivery["x"], delivery["y"])
             # Deadline dominates, but local distance keeps routes compact enough to save energy.
-            slack_hint = float(delivery["deadline"]) - (base_return + distance(last_point, target))
-            scored.append((distance(last_point, target) + max(0.0, -slack_hint) * 3.0, float(delivery["deadline"]), delivery))
+            leg_hint = distance(last_point, target)
+            slack_hint = float(delivery["deadline"]) - (base_return + leg_hint)
+            scored.append((leg_hint + max(0.0, -slack_hint) * 3.0, float(delivery["deadline"]), delivery))
         scored.sort(key=lambda item: (item[0], item[1]))
 
         accepted = False
-        for _, _, delivery in scored[:18]:
+        for _, _, delivery in scored[:6 if large_nfz else 18]:
             trial = route + [delivery]
-            arrivals_end, return_time, arrivals = estimate_direct_route_time(warehouse, trial, start_time, no_fly_zones)
-            if arrivals[-1] > float(delivery["deadline"]) + 1e-5:
-                continue
-            if any(arrival > float(item["deadline"]) + 1e-5 for item, arrival in zip(trial, arrivals)):
-                continue
+            if large_nfz:
+                approx_t = float(start_time)
+                pos = warehouse
+                approx_arrivals = []
+                for item in trial:
+                    target = point_tuple(item["x"], item["y"])
+                    approx_t += distance(pos, target)
+                    approx_arrivals.append(approx_t)
+                    pos = target
+                if any(arrival > float(item["deadline"]) + 1e-5 for item, arrival in zip(trial, approx_arrivals)):
+                    continue
+            else:
+                arrivals_end, return_time, arrivals = estimate_direct_route_time(warehouse, trial, start_time, no_fly_zones)
+                if arrivals[-1] > float(delivery["deadline"]) + 1e-5:
+                    continue
+                if any(arrival > float(item["deadline"]) + 1e-5 for item, arrival in zip(trial, arrivals)):
+                    continue
             if route_energy(warehouse, trial) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
                 continue
             route = trial
