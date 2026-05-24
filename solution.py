@@ -452,13 +452,15 @@ def _build_trip(state, drone, remaining_sorted, nfzs, warehouse,
                 )
                 if not ok:
                     continue
-                # Mix cost and per-delivery deadline urgency: tiebreak
-                # toward the candidate whose deadline slack is tightest.
                 cost = end_state['time'] * 0.05 + end_state['energy'] * 0.1
-                # Use the tightest deadline in the new ordering as a soft
-                # urgency tiebreaker (smaller = more urgent).
-                tightest = min(d['deadline'] for d in new_order)
-                score = (cost, tightest)
+                # Deadline-urgency bonus: prefer trips that include
+                # tight-deadline deliveries (small slack vs the drone's
+                # current time). This avoids letting urgent items
+                # expire while loose-deadline picks are scooped up.
+                min_slack = min(d['deadline'] - cur_t for d in new_order)
+                if min_slack < 0:
+                    min_slack = 0
+                score = cost + 0.10 * min_slack
                 if best_score is None or score < best_score:
                     best_score = score
                     best = (cand, new_order, path, end_state, cost)
