@@ -439,6 +439,65 @@ def direct_trip_result(drone, route, start_time):
     }
 
 
+
+def direct_wait_trip_result(drone, route, start_time, no_fly_zones):
+    warehouse = simulate_return_plan.warehouse
+    total_payload = sum(float(d["weight"]) for d in route)
+    if total_payload > float(drone["max_payload"]) + EPS:
+        return None
+
+    t = float(start_time)
+    payload = total_payload
+    pos = warehouse
+    battery = BATTERY_CAPACITY
+    energy = 0.0
+    path = [step(warehouse, t, "PICKUP", delivery_ids=[d["id"] for d in route])]
+
+    for delivery in route:
+        target = point_tuple(delivery["x"], delivery["y"])
+        depart = earliest_safe_departure(pos, target, t, no_fly_zones)
+        if depart > t + EPS:
+            path.append(step(pos, depart, "WAIT"))
+            t = depart
+        dist = distance(pos, target)
+        leg_energy = dist * (1.0 + payload)
+        battery -= leg_energy
+        energy += leg_energy
+        if battery < -1e-5:
+            return None
+        t += dist
+        if t > float(delivery["deadline"]) + 1e-5:
+            return None
+        path.append(step(target, t, "DELIVER", delivery_id=delivery["id"]))
+        payload -= float(delivery["weight"])
+        pos = target
+
+    depart = earliest_safe_departure(pos, warehouse, t, no_fly_zones)
+    if depart > t + EPS:
+        path.append(step(pos, depart, "WAIT"))
+        t = depart
+    dist = distance(pos, warehouse)
+    battery -= dist
+    energy += dist
+    if battery < -1e-5:
+        return None
+    t += dist
+    path.append(step(warehouse, t, "RETURN"))
+
+    local_score = len(route) * 100.0 - energy * 0.1 - max(0.0, t - start_time) * 0.05
+    if local_score <= 0.0:
+        return None
+    return {
+        "path": path,
+        "delivery_ids": [d["id"] for d in route],
+        "time": t,
+        "energy": energy,
+        "score": local_score,
+        "ends_at_warehouse": True,
+        "reservations": [],
+    }
+
+
 def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones, charging_stations):
     warehouse = simulate_return_plan.warehouse
     best = None
@@ -449,7 +508,7 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
             continue
         _, return_time, arrivals = estimate_direct_route_time(warehouse, [delivery], start_time, no_fly_zones)
         if arrivals[0] > float(delivery["deadline"]) + 1e-5:
-            if not no_fly_zones:
+            if not no_fly_zones or len(deadline_sorted) >= 1000:
                 pending_ids.discard(delivery["id"])
             continue
         if route_energy(warehouse, [delivery]) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
@@ -457,6 +516,8 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
             continue
         if not no_fly_zones and not charging_stations:
             trip = direct_trip_result(drone, [delivery], start_time)
+        elif len(deadline_sorted) >= 1000:
+            trip = direct_wait_trip_result(drone, [delivery], start_time, no_fly_zones)
         else:
             trip = simulate_trip(drone, [delivery], start_time, no_fly_zones, charging_stations)
         tested += 1
@@ -520,6 +581,8 @@ def build_fast_trip_for_drone(drone, deadline_sorted, pending_ids, start_time, n
     while route:
         if not no_fly_zones and not charging_stations:
             trip = direct_trip_result(drone, route, start_time)
+        elif len(deadline_sorted) >= 1000:
+            trip = direct_wait_trip_result(drone, route, start_time, no_fly_zones)
         else:
             trip = simulate_trip(drone, route, start_time, no_fly_zones, charging_stations)
         if trip is not None:
@@ -655,12 +718,6 @@ def solve(warehouse, drones, deliveries, no_fly_zones, charging_stations):
     Schedule drone deliveries to maximize on-time deliveries while respecting
     dynamic no-fly zones, payload limits, battery capacity, and charging.
     """
-    if len(deliveries) >= 1000 and no_fly_zones and len(deliveries) * len(no_fly_zones) > 100000:
-        safe_start = max(float(zone.get("T_end", 0.0)) for zone in no_fly_zones) + SAFETY_EPS
-        # Large obstacle-heavy cases can spend all runtime proving segment safety.
-        # Waiting at the warehouse is free and makes every later straight leg NFZ-safe.
-        return solve_fast(warehouse, drones, deliveries, [], [], initial_time=safe_start)
-
     if len(deliveries) >= 25:
         return solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations)
 
