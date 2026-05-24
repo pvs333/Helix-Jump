@@ -289,18 +289,17 @@ def simulate_return_plan(pos, t, battery, no_fly_zones, charging_stations):
                 if best is None or candidate["energy"] * 0.1 + candidate["time"] * 0.05 < best["energy"] * 0.1 + best["time"] * 0.05:
                     best = candidate
 
-        final_station = simulate_leg(pos, station_point, t, battery, 0.0, no_fly_zones, "RETURN")
-        if final_station is not None:
-            candidate = {
-                "steps": final_station["steps"],
-                "time": final_station["time"],
-                "battery": final_station["battery"],
-                "energy": final_station["energy"],
-                "ends_at_warehouse": False,
-                "reservations": [],
-            }
-            if best is None or len(charging_stations) == 1 and candidate["time"] < best["time"]:
-                best = candidate
+        if best is None:
+            final_station = simulate_leg(pos, station_point, t, battery, 0.0, no_fly_zones, "RETURN")
+            if final_station is not None:
+                best = {
+                    "steps": final_station["steps"],
+                    "time": final_station["time"],
+                    "battery": final_station["battery"],
+                    "energy": final_station["energy"],
+                    "ends_at_warehouse": False,
+                    "reservations": [],
+                }
 
     return best
 
@@ -354,6 +353,173 @@ def simulate_trip(drone, order, start_time, no_fly_zones, charging_stations):
 
 def delivery_sort_key(warehouse, delivery):
     return (float(delivery["deadline"]), distance(warehouse, (delivery["x"], delivery["y"])), -float(delivery["weight"]))
+
+
+
+def route_energy(warehouse, route):
+    total_payload = sum(float(d["weight"]) for d in route)
+    payload = total_payload
+    pos = warehouse
+    energy = 0.0
+    for delivery in route:
+        target = point_tuple(delivery["x"], delivery["y"])
+        energy += distance(pos, target) * (1.0 + payload)
+        payload -= float(delivery["weight"])
+        pos = target
+    energy += distance(pos, warehouse)
+    return energy
+
+
+def estimate_direct_route_time(warehouse, route, start_time, no_fly_zones):
+    t = float(start_time)
+    pos = warehouse
+    arrivals = []
+    for delivery in route:
+        target = point_tuple(delivery["x"], delivery["y"])
+        depart = earliest_safe_departure(pos, target, t, no_fly_zones)
+        t = depart + distance(pos, target)
+        arrivals.append(t)
+        pos = target
+    depart = earliest_safe_departure(pos, warehouse, t, no_fly_zones)
+    return t, depart + distance(pos, warehouse), arrivals
+
+
+def gather_fast_candidates(deadline_sorted, pending_ids, max_count, drone, excluded_ids, max_weight=None):
+    limit_weight = float(drone["max_payload"]) if max_weight is None else float(max_weight)
+    result = []
+    for delivery in deadline_sorted:
+        did = delivery["id"]
+        if did in pending_ids and did not in excluded_ids and float(delivery["weight"]) <= limit_weight + EPS:
+            result.append(delivery)
+            if len(result) >= max_count:
+                break
+    return result
+
+
+def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones, charging_stations):
+    warehouse = simulate_return_plan.warehouse
+    best = None
+    seeds = gather_fast_candidates(deadline_sorted, pending_ids, 48, drone, set())
+    for delivery in seeds:
+        _, return_time, arrivals = estimate_direct_route_time(warehouse, [delivery], start_time, no_fly_zones)
+        if arrivals[0] > float(delivery["deadline"]) + 1e-5:
+            continue
+        if route_energy(warehouse, [delivery]) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
+            continue
+        trip = simulate_trip(drone, [delivery], start_time, no_fly_zones, charging_stations)
+        if trip is None:
+            continue
+        key = (float(delivery["deadline"]), return_time, -trip["score"])
+        if best is None or key < best["key"]:
+            best = {"route": [delivery], "trip": trip, "key": key}
+    return best
+
+
+def build_fast_trip_for_drone(drone, deadline_sorted, pending_ids, start_time, no_fly_zones, charging_stations):
+    seed = fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones, charging_stations)
+    if seed is None:
+        return None
+
+    warehouse = simulate_return_plan.warehouse
+    route = list(seed["route"])
+    route_ids = {route[0]["id"]}
+    used_weight = sum(float(d["weight"]) for d in route)
+    max_payload = float(drone["max_payload"])
+    max_stops = 18 if len(deadline_sorted) >= 1000 else 12
+
+    while len(route) < max_stops:
+        available_weight = max_payload - used_weight
+        if available_weight <= EPS:
+            break
+        window = gather_fast_candidates(deadline_sorted, pending_ids, 96, drone, route_ids, available_weight)
+        if not window:
+            break
+
+        _, base_return, _ = estimate_direct_route_time(warehouse, route, start_time, no_fly_zones)
+        last_point = point_tuple(route[-1]["x"], route[-1]["y"])
+        scored = []
+        for delivery in window:
+            target = point_tuple(delivery["x"], delivery["y"])
+            # Deadline dominates, but local distance keeps routes compact enough to save energy.
+            slack_hint = float(delivery["deadline"]) - (base_return + distance(last_point, target))
+            scored.append((distance(last_point, target) + max(0.0, -slack_hint) * 3.0, float(delivery["deadline"]), delivery))
+        scored.sort(key=lambda item: (item[0], item[1]))
+
+        accepted = False
+        for _, _, delivery in scored[:18]:
+            trial = route + [delivery]
+            arrivals_end, return_time, arrivals = estimate_direct_route_time(warehouse, trial, start_time, no_fly_zones)
+            if arrivals[-1] > float(delivery["deadline"]) + 1e-5:
+                continue
+            if any(arrival > float(item["deadline"]) + 1e-5 for item, arrival in zip(trial, arrivals)):
+                continue
+            if route_energy(warehouse, trial) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
+                continue
+            route = trial
+            route_ids.add(delivery["id"])
+            used_weight += float(delivery["weight"])
+            accepted = True
+            break
+        if not accepted:
+            break
+
+    while route:
+        trip = simulate_trip(drone, route, start_time, no_fly_zones, charging_stations)
+        if trip is not None:
+            return trip
+        removed = route.pop()
+        route_ids.discard(removed["id"])
+    return None
+
+
+def solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations):
+    simulate_return_plan.warehouse = point_tuple(warehouse[0], warehouse[1])
+    stations = []
+    for station in charging_stations:
+        stations.append({
+            "x": float(station["x"]),
+            "y": float(station["y"]),
+            "slots": int(station.get("slots", 1)),
+            "_reservations": [],
+        })
+
+    deadline_sorted = sorted([dict(d) for d in deliveries], key=lambda d: delivery_sort_key(simulate_return_plan.warehouse, d))
+    pending_ids = {d["id"] for d in deadline_sorted}
+    failed_attempts = {drone.get("id", str(i)): 0 for i, drone in enumerate(drones)}
+    drone_states = [
+        {"drone": drone, "time": 0.0, "path": [], "active": True}
+        for drone in drones
+    ]
+
+    while pending_ids and any(state["active"] for state in drone_states):
+        state = min(
+            (s for s in drone_states if s["active"]),
+            key=lambda s: (s["time"], str(s["drone"].get("id", ""))),
+        )
+        drone_id = state["drone"].get("id", "")
+        trip = build_fast_trip_for_drone(state["drone"], deadline_sorted, pending_ids, state["time"], no_fly_zones, stations)
+        if trip is None:
+            failed_attempts[drone_id] = failed_attempts.get(drone_id, 0) + 1
+            if failed_attempts[drone_id] >= 1:
+                state["active"] = False
+            continue
+
+        if state["path"]:
+            state["path"].extend(trip["path"])
+        else:
+            state["path"] = trip["path"]
+        state["time"] = trip["time"]
+        state["active"] = bool(trip["ends_at_warehouse"])
+        failed_attempts[drone_id] = 0
+        commit_reservations(stations, trip["reservations"])
+        for did in trip["delivery_ids"]:
+            pending_ids.discard(did)
+
+    return [
+        {"drone_id": state["drone"]["id"], "path": state["path"]}
+        for state in drone_states
+        if state["path"]
+    ]
 
 
 def candidate_pool(warehouse, pending, drone):
@@ -431,6 +597,9 @@ def solve(warehouse, drones, deliveries, no_fly_zones, charging_stations):
     Schedule drone deliveries to maximize on-time deliveries while respecting
     dynamic no-fly zones, payload limits, battery capacity, and charging.
     """
+    if len(deliveries) >= 25:
+        return solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations)
+
     simulate_return_plan.warehouse = point_tuple(warehouse[0], warehouse[1])
     stations = []
     for station in charging_stations:
