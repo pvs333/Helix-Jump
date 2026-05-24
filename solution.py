@@ -529,7 +529,7 @@ def build_fast_trip_for_drone(drone, deadline_sorted, pending_ids, start_time, n
     return None
 
 
-def solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations):
+def solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations, initial_time=0.0):
     simulate_return_plan.warehouse = point_tuple(warehouse[0], warehouse[1])
     simulate_return_plan.allow_station_end = False
     stations = []
@@ -545,7 +545,7 @@ def solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations):
     pending_ids = {d["id"] for d in deadline_sorted}
     failed_attempts = {drone.get("id", str(i)): 0 for i, drone in enumerate(drones)}
     drone_states = [
-        {"drone": drone, "time": 0.0, "path": [], "active": True}
+        {"drone": drone, "time": float(initial_time), "path": [], "active": True}
         for drone in drones
     ]
 
@@ -655,6 +655,12 @@ def solve(warehouse, drones, deliveries, no_fly_zones, charging_stations):
     Schedule drone deliveries to maximize on-time deliveries while respecting
     dynamic no-fly zones, payload limits, battery capacity, and charging.
     """
+    if len(deliveries) >= 1000 and no_fly_zones and len(deliveries) * len(no_fly_zones) > 100000:
+        safe_start = max(float(zone.get("T_end", 0.0)) for zone in no_fly_zones) + SAFETY_EPS
+        # Large obstacle-heavy cases can spend all runtime proving segment safety.
+        # Waiting at the warehouse is free and makes every later straight leg NFZ-safe.
+        return solve_fast(warehouse, drones, deliveries, [], [], initial_time=safe_start)
+
     if len(deliveries) >= 25:
         return solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations)
 
