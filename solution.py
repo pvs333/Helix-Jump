@@ -447,8 +447,11 @@ def fast_seed_trip(drone, deadline_sorted, pending_ids, start_time, no_fly_zones
             continue
         _, return_time, arrivals = estimate_direct_route_time(warehouse, [delivery], start_time, no_fly_zones)
         if arrivals[0] > float(delivery["deadline"]) + 1e-5:
+            if not no_fly_zones:
+                pending_ids.discard(delivery["id"])
             continue
         if route_energy(warehouse, [delivery]) > BATTERY_CAPACITY + 1e-5 and not charging_stations:
+            pending_ids.discard(delivery["id"])
             continue
         if not no_fly_zones and not charging_stations:
             trip = direct_trip_result(drone, [delivery], start_time)
