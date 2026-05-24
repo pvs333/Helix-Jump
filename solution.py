@@ -255,7 +255,7 @@ def simulate_return_plan(pos, t, battery, no_fly_zones, charging_stations):
 
     for idx, station in enumerate(charging_stations):
         station_point = point_tuple(station["x"], station["y"])
-        to_station = simulate_leg(pos, station_point, t, battery, 0.0, no_fly_zones, "CHARGE")
+        to_station = simulate_leg(pos, station_point, t, battery, 0.0, no_fly_zones, "WAYPOINT")
         if to_station is None:
             continue
 
@@ -271,12 +271,9 @@ def simulate_return_plan(pos, t, battery, no_fly_zones, charging_stations):
             charge_steps = list(to_station["steps"])
             if start_charge > to_station["time"] + EPS:
                 charge_steps.append(step(station_point, start_charge, "WAIT"))
-                charge_steps.append(step(station_point, start_charge, "CHARGE"))
+            charge_steps.append(step(station_point, start_charge, "CHARGE"))
             complete_t = start_charge + duration
-            if duration > EPS or not charge_steps or charge_steps[-1]["action"] != "CHARGE":
-                charge_steps.append(step(station_point, complete_t, "CHARGE_COMPLETE"))
-            else:
-                charge_steps.append(step(station_point, complete_t, "CHARGE_COMPLETE"))
+            charge_steps.append(step(station_point, complete_t, "CHARGE_COMPLETE"))
             charged_battery = min(BATTERY_CAPACITY, to_station["battery"] + duration * CHARGE_RATE)
             final = simulate_leg(station_point, warehouse, complete_t, charged_battery, 0.0, no_fly_zones, "RETURN")
             if final is not None:
