@@ -289,17 +289,19 @@ def simulate_return_plan(pos, t, battery, no_fly_zones, charging_stations):
                 if best is None or candidate["energy"] * 0.1 + candidate["time"] * 0.05 < best["energy"] * 0.1 + best["time"] * 0.05:
                     best = candidate
 
-        if best is None:
-            final_station = simulate_leg(pos, station_point, t, battery, 0.0, no_fly_zones, "RETURN")
-            if final_station is not None:
-                best = {
-                    "steps": final_station["steps"],
-                    "time": final_station["time"],
-                    "battery": final_station["battery"],
-                    "energy": final_station["energy"],
-                    "ends_at_warehouse": False,
-                    "reservations": [],
-                }
+        final_station = simulate_leg(pos, station_point, t, battery, 0.0, no_fly_zones, "RETURN")
+        if final_station is not None:
+            candidate = {
+                "steps": final_station["steps"],
+                "time": final_station["time"],
+                "battery": final_station["battery"],
+                "energy": final_station["energy"],
+                "ends_at_warehouse": False,
+                "reservations": [],
+            }
+            allow_station_end = getattr(simulate_return_plan, "allow_station_end", False)
+            if best is None or allow_station_end and len(charging_stations) == 1 and candidate["time"] < best["time"]:
+                best = candidate
 
     return best
 
@@ -529,6 +531,7 @@ def build_fast_trip_for_drone(drone, deadline_sorted, pending_ids, start_time, n
 
 def solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations):
     simulate_return_plan.warehouse = point_tuple(warehouse[0], warehouse[1])
+    simulate_return_plan.allow_station_end = False
     stations = []
     for station in charging_stations:
         stations.append({
@@ -656,6 +659,7 @@ def solve(warehouse, drones, deliveries, no_fly_zones, charging_stations):
         return solve_fast(warehouse, drones, deliveries, no_fly_zones, charging_stations)
 
     simulate_return_plan.warehouse = point_tuple(warehouse[0], warehouse[1])
+    simulate_return_plan.allow_station_end = True
     stations = []
     for station in charging_stations:
         stations.append({
